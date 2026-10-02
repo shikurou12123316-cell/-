@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>夕暮れのカメムシ退治（2D修正版）</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#2b1f1d;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{display:block;width:100%;height:100%}
+</style></head><body><canvas id="c"></canvas>
+<script>
+(function(){
+var cv=document.getElementById("c"),g=cv.getContext("2d"),W,H,S;
+var SAT=0,SAB=0,pr1=document.createElement('div'),pr2=document.createElement('div');
+pr1.style.cssText='position:fixed;left:0;top:0;width:0;height:env(safe-area-inset-top,0px);visibility:hidden';
+pr2.style.cssText='position:fixed;left:0;bottom:0;width:0;height:env(safe-area-inset-bottom,0px);visibility:hidden';
+document.body.appendChild(pr1);document.body.appendChild(pr2);
+function rs(){SAT=pr1.offsetHeight||0;SAB=pr2.offsetHeight||0;var d=window.devicePixelRatio||1;W=window.innerWidth;H=window.innerHeight;S=Math.min(W,H)/400;S=Math.max(0.8,Math.min(S,2));cv.width=W*d;cv.height=H*d;g.setTransform(d,0,0,d,0,0)}
+window.addEventListener("resize",rs);rs();
+var st="title",bugs=[],fx=[],score=0,lives=3,t=0,spawn=0,lockUntil=0,items=[],falls=[],stock={spray:0,swat:0},armed=false,spray=null,swatFx=null,itemT=15,combo=0,comboT=0,slow=0,shake=0,parts=[],hi=0,rec=false,nextBoss=25;
+try{hi=+localStorage.getItem('kmhi')||0}catch(e){}
+function burst(x,y,c,n){for(var i=0;i<n;i++){var a=Math.random()*6.28,v=60+Math.random()*160;parts.push({x:x,y:y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,l:0.5,c:c})}}
+var ac=null,bgmT=null,p1,p2;
+var dayN=[261.63,293.66,329.63,392,440],nightN=[523.25,587.33,659.25,783.99,880,1046.5];
+function initAudio(){
+  if(!ac){var A=window.AudioContext||window.webkitAudioContext;if(A){ac=new A();startBGM()}}
+  if(ac&&ac.state!=="running")ac.resume();
+}
+function startBGM(){
+  p1=ac.createOscillator();p2=ac.createOscillator();var pg=ac.createGain();
+  p1.frequency.value=196;p2.frequency.value=293.66;pg.gain.value=0.03;
+  p1.connect(pg);p2.connect(pg);pg.connect(ac.destination);p1.start();p2.start();melody();
+}
+function nr(){return st==="play"?Math.min(t/120,1):0}
+var CH=[[261.63,329.63,392,523.25],[220,261.63,329.63,440],[174.61,220,261.63,349.23],[196,246.94,293.66,392]],ARP=[0,1,2,3,2,1,2,1],stp=0;
+function tone(f,t0,dur,vol,type){var o=ac.createOscillator(),gn=ac.createGain();o.type=type;o.frequency.value=f;
+  gn.gain.setValueAtTime(0.0001,t0);gn.gain.linearRampToValueAtTime(vol,t0+0.02);gn.gain.exponentialRampToValueAtTime(0.001,t0+dur);
+  o.connect(gn);gn.connect(ac.destination);o.start(t0);o.stop(t0+dur+0.03)}
+function kick(t0){var o=ac.createOscillator(),gn=ac.createGain();o.frequency.setValueAtTime(130,t0);o.frequency.exponentialRampToValueAtTime(45,t0+0.12);
+  gn.gain.setValueAtTime(0.16,t0);gn.gain.exponentialRampToValueAtTime(0.001,t0+0.15);o.connect(gn);gn.connect(ac.destination);o.start(t0);o.stop(t0+0.16)}
+function hat(t0){var sr=ac.createBufferSource();sr.buffer=noiseBuf(0.04);var f=ac.createBiquadFilter();f.type="highpass";f.frequency.value=6000;
+  var gn=ac.createGain();gn.gain.setValueAtTime(0.04,t0);gn.gain.exponentialRampToValueAtTime(0.001,t0+0.04);sr.connect(f);f.connect(gn);gn.connect(ac.destination);sr.start(t0)}
+// 夕方はゆったり安らぎ → 夜に向けてテンポ・音色・リズムが盛り上がる
+function melody(){
+  if(!ac)return;var n=nr(),bpm=64+n*76,step=60/bpm/2;
+  if(st==="play"&&ac.state==="running"){
+    var t0=ac.currentTime+0.03,bar=Math.floor(stp/8)%4,i=stp%8,ch=CH[bar];
+    tone(ch[ARP[i]]*(n>0.5&&i%2?2:1),t0,Math.max(0.25,1.0-n*0.6),0.07+n*0.03,n>0.4?"triangle":"sine");
+    if(n>0.15&&(i===0||i===4))tone(ch[0]/2,t0,0.8-n*0.4,0.09,"sine");
+    if(n>0.4&&i%2===0)kick(t0);
+    if(n>0.6&&i%2===1)hat(t0);
+    if(i===0&&p1){p1.frequency.setTargetAtTime(ch[0],t0,0.3);p2.frequency.setTargetAtTime(ch[2],t0,0.3)}
+    stp++;
+  }
+  bgmT=setTimeout(melody,step*1000);
+}
+// タブが裏に回ったら音を止める
+document.addEventListener("visibilitychange",function(){
+  if(!ac)return;if(document.hidden)ac.suspend();else ac.resume();
+});
+function zap(){
+  if(!ac)return;var now=ac.currentTime,len=Math.floor(ac.sampleRate*0.08),b=ac.createBuffer(1,len,ac.sampleRate),d=b.getChannelData(0);
+  for(var i=0;i<len;i++)d[i]=Math.random()*2-1;
+  var s=ac.createBufferSource();s.buffer=b;var f=ac.createBiquadFilter();f.type="highpass";f.frequency.value=1200;
+  var z=ac.createGain();z.gain.setValueAtTime(0.25,now);z.gain.exponentialRampToValueAtTime(0.01,now+0.08);
+  s.connect(f);f.connect(z);z.connect(ac.destination);s.start(now);
+}
+function noiseBuf(sec){var n=Math.floor(ac.sampleRate*sec),b=ac.createBuffer(1,n,ac.sampleRate),d=b.getChannelData(0);for(var i=0;i<n;i++)d[i]=Math.random()*2-1;return b}
+function sndSpray(){if(!ac)return;var now=ac.currentTime,s=ac.createBufferSource();s.buffer=noiseBuf(0.9);
+  var f=ac.createBiquadFilter();f.type="bandpass";f.frequency.value=3500;f.Q.value=0.6;var g2=ac.createGain();
+  g2.gain.setValueAtTime(0.0001,now);g2.gain.exponentialRampToValueAtTime(0.22,now+0.06);g2.gain.exponentialRampToValueAtTime(0.001,now+0.9);
+  s.connect(f);f.connect(g2);g2.connect(ac.destination);s.start(now)}
+function sndSwat(){if(!ac)return;var now=ac.currentTime,s=ac.createBufferSource();s.buffer=noiseBuf(0.08);
+  var f=ac.createBiquadFilter();f.type="highpass";f.frequency.value=800;var g2=ac.createGain();g2.gain.setValueAtTime(0.4,now);g2.gain.exponentialRampToValueAtTime(0.001,now+0.08);
+  s.connect(f);f.connect(g2);g2.connect(ac.destination);s.start(now);
+  var o=ac.createOscillator(),g3=ac.createGain();o.frequency.setValueAtTime(180,now);o.frequency.exponentialRampToValueAtTime(50,now+0.12);
+  g3.gain.setValueAtTime(0.5,now);g3.gain.exponentialRampToValueAtTime(0.001,now+0.14);o.connect(g3);g3.connect(ac.destination);o.start(now);o.stop(now+0.15)}
+function sndGet(){if(!ac)return;var now=ac.currentTime;[660,880].forEach(function(fr,i){var o=ac.createOscillator(),g2=ac.createGain();o.type="triangle";o.frequency.value=fr;
+  g2.gain.setValueAtTime(0.15,now+i*0.08);g2.gain.exponentialRampToValueAtTime(0.001,now+i*0.08+0.15);o.connect(g2);g2.connect(ac.destination);o.start(now+i*0.08);o.stop(now+i*0.08+0.16)})}
+function sndNo(){if(!ac)return;var now=ac.currentTime,o=ac.createOscillator(),g2=ac.createGain();o.type="square";o.frequency.value=110;
+  g2.gain.setValueAtTime(0.12,now);g2.gain.exponentialRampToValueAtTime(0.001,now+0.18);o.connect(g2);g2.connect(ac.destination);o.start(now);o.stop(now+0.2)}
+var PTS={stag:[60,"+60 クワガタ！","#00ffff"],black:[30,"+30 BLACK!","#ff3366"],normal:[10,"+10","#ffea78"],gold:[100,"+100 金カメムシ！SLOW","#ffd700"],boss:[150,"+150 撃破！","#ff6644"]};
+function itemKill(b,dmg){
+  b.hp-=dmg;
+  if(b.hp>0){shake=0.2;burst(b.x,b.y,"#ff8844",10);fx.push({x:b.x,y:b.y-20,text:"HIT!",color:"#ff8844",l:0.6});return}
+  b.dead=true;var mult=1,p=PTS[b.type];var bp0=bulb();
+  falls.push({hp:0,mhp:1,x:b.x,y:b.y,size:b.size,type:b.type,wf:b.wf,sa:b.sa,rot:Math.atan2(bp0.y-b.y,bp0.x-b.x)+Math.PI/2,vx:(Math.random()-0.5)*120,vy:-60-Math.random()*100,vr:(Math.random()-0.5)*12,l:1.4});
+  if(b.type==="gold")slow=4;
+  score+=p[0]*mult;burst(b.x,b.y,p[2],6);fx.push({x:b.x,y:b.y-10,text:p[1],color:p[2],l:0.9});
+}
+function btnRect(i){var w=Math.min(160,W*0.42),h=58;return{x:i===0?W/2-w-8:W/2+8,y:H-h-16-SAB,w:w,h:h}}
+function useItem(i){
+  if(i===0){
+    if(stock.spray<=0){sndNo();return}
+    stock.spray--;armed=false;bugs.forEach(function(b){b.sprayed=false});spray={t:0,x:W/2,y:H};sndSpray();shake=0.1;
+    fx.push({x:W/2,y:H*0.6,text:"シュー！",color:"#aef",l:0.8});
+  }else{
+    if(stock.swat<=0){sndNo();return}
+    armed=!armed;
+  }
+}
+function swat(px,py){
+  armed=false;stock.swat--;var R=120*Math.max(0.8,Math.min(S,1.5));swatFx={x:px,y:py,r:R,l:0.35};sndSwat();shake=0.2;
+  fx.push({x:px,y:py-R-10,text:"パチン！",color:"#fff",l:0.7});
+  bugs.forEach(function(b){
+    if(b.dead||Math.hypot(b.x-px,b.y-py)>=R+b.size*0.4)return;
+    if(b.type==="spider"){fx.push({x:b.x,y:b.y-20,text:"クモには効かない！",color:"#ff9966",l:0.9});sndNo()}else itemKill(b,2);
+  });
+}
+function drawItem(it){
+  g.save();g.translate(it.x,it.y);g.rotate(Math.sin(it.ph*2)*0.2);
+  g.shadowColor=it.k==="spray"?"#6ff":"#8f8";g.shadowBlur=14+Math.sin(it.ph*6)*6;
+  if(it.k==="spray"){
+    g.fillStyle="#cc3333";g.fillRect(-12,-8,24,32);g.fillStyle="#ddd";g.fillRect(-8,-18,16,10);g.fillRect(2,-23,10,5);
+    g.shadowBlur=0;g.fillStyle="#fff";g.font="bold 14px sans-serif";g.textAlign="center";g.fillText("殺",0,14);
+  }else{
+    g.fillStyle="#8b5a2b";g.fillRect(-3,-2,6,30);g.fillStyle="#44aaff";g.fillRect(-15,-32,30,30);
+    g.shadowBlur=0;g.strokeStyle="#1a5a99";g.lineWidth=1.5;for(var i=-10;i<=10;i+=10){g.beginPath();g.moveTo(i,-32);g.lineTo(i,-2);g.moveTo(-15,-17+i);g.lineTo(15,-17+i);g.stroke()}
+  }
+  g.restore();g.fillStyle="#fff";g.font="11px sans-serif";g.textAlign="center";g.fillText(it.k==="spray"?"殺虫剤":"ハエ叩き",it.x,it.y+42);
+}
+function drawButtons(){
+  [["殺虫剤","spray"],["ハエ叩き","swat"]].forEach(function(a,i){
+    var r=btnRect(i),n=stock[a[1]],on=n>0,arm=(i===1&&armed);
+    g.fillStyle=arm?"rgba(255,234,120,.9)":(on?"rgba(40,60,80,.85)":"rgba(40,40,40,.5)");
+    g.beginPath();g.moveTo(r.x+12,r.y);g.arcTo(r.x+r.w,r.y,r.x+r.w,r.y+r.h,12);g.arcTo(r.x+r.w,r.y+r.h,r.x,r.y+r.h,12);g.arcTo(r.x,r.y+r.h,r.x,r.y,12);g.arcTo(r.x,r.y,r.x+r.w,r.y,12);g.closePath();g.fill();
+    g.strokeStyle=on?"#9ff":"#666";g.lineWidth=2;g.stroke();
+    g.fillStyle=arm?"#222":(on?"#fff":"#888");g.textAlign="center";g.font="bold 18px sans-serif";g.fillText(a[0]+" ×"+n,r.x+r.w/2,r.y+r.h/2+6);
+  });
+  if(armed){g.fillStyle="#ffea78";g.textAlign="center";g.font="bold 16px sans-serif";g.fillText("叩く場所をタップ！",W/2,H-100-SAB)}
+}
+function start(){stp=0;bugs=[];fx=[];parts=[];items=[];falls=[];stock={spray:0,swat:0};armed=false;spray=null;swatFx=null;itemT=15;combo=0;comboT=0;slow=0;shake=0;nextBoss=25;rec=false;score=0;lives=3;t=0;spawn=0;st="play"}
+function gameOver(){if(st==="over")return;st="over";rec=score>hi&&score>0;if(rec){hi=score;try{localStorage.setItem("kmhi",hi)}catch(e){}}lockUntil=performance.now()+800}
+function bulb(){return{x:W/2,y:H*0.22,r:30*Math.max(0.8,Math.min(S,1.5))}}
+function spawnBug(force){
+  var s=Math.random(),x,y;
+  if(s<0.33){x=Math.random()*W;y=H+40}else if(s<0.66){x=-40;y=H*0.3+Math.random()*H*0.7}else{x=W+40;y=H*0.3+Math.random()*H*0.7}
+  var sp=(85+Math.min(t,150)*1.0)*S,r=Math.random(),ty="normal";
+  if(r<1/20)ty="spider";else if(r<1/20+0.08)ty="black";else if(r<1/20+0.08+0.03)ty="gold";
+  if(force)ty=force;
+  var sz={stag:42,spider:28,black:36,normal:32,gold:34,boss:80}[ty]*Math.max(0.8,Math.min(S,1.6));
+  var m={stag:0.75,spider:0.85,black:1.15,normal:1,gold:1.6,boss:0.5}[ty];
+  bugs.push({x:x,y:y,size:sz,sp:sp*m,wf:Math.random()*10,sa:Math.random()*100,type:ty,hp:ty==='boss'?3+Math.floor(t/50):1,mhp:ty==='boss'?3+Math.floor(t/50):1,dead:false});
+}
+var RANKS=[[0,"E","電球を守れなかった…もう一度挑戦！"],[1000,"D","カメムシの見習いハンター"],[3000,"C","なかなかの腕前！夜も安心！"],[7000,"B","カメムシ撃退プロフェッショナル！"],[13000,"A","虫の王者！電球の守護神！"],[22000,"S","伝説の昆虫マスター！圧倒的スピード！"]];
+function comment(s){var i=0;while(i+1<RANKS.length&&s>=RANKS[i+1][0])i++;return{r:RANKS[i][1],txt:RANKS[i][2],next:i+1<RANKS.length?RANKS[i+1][0]-s:0}}
+function legs(size,col,w,fn){g.strokeStyle=col;g.lineWidth=w;[-1,1].forEach(function(sd){fn(sd)})}
+function draw(b){
+  g.save();g.translate(b.x,b.y);var bp=bulb(),a=Math.atan2(bp.y-b.y,bp.x-b.x);
+  g.rotate(b.rot!==undefined?b.rot:a+Math.PI/2+(b.type==="spider"?Math.cos(b.sa*8)*0.3:0));
+  var z=b.size;
+  if(b.type==="stag"){
+    var lm=Math.sin(b.sa*12)*z*0.15;
+    legs(z,"#000",2.5,function(s){
+      [[-0.2,-0.5,-0.7,1],[0,-0.1,0.1,-1],[0.2,0.5,0.75,1]].forEach(function(l){
+        g.beginPath();g.moveTo(s*z*0.22,z*l[0]);g.lineTo(s*z*0.75+lm*l[3],z*l[1]);g.lineTo(s*z*0.88+lm*l[3],z*l[2]);g.stroke()})});
+    var ja=Math.sin(b.sa*8)*0.15;g.fillStyle="#111115";
+    [-1,1].forEach(function(s){g.save();g.rotate(s*ja);g.beginPath();g.moveTo(s*z*0.12,-z*0.5);
+      g.bezierCurveTo(s*z*0.45,-z*0.8,s*z*0.35,-z*1.15,s*z*0.05,-z*1.25);
+      g.bezierCurveTo(s*z*0.25,-z,s*z*0.25,-z*0.7,s*z*0.02,-z*0.52);g.closePath();g.fill();g.stroke();g.restore()});
+    var gr=g.createLinearGradient(-z*0.4,0,z*0.4,0);gr.addColorStop(0,"#0a0a0f");gr.addColorStop(0.4,"#2a2a35");gr.addColorStop(1,"#050508");
+    g.fillStyle=gr;g.beginPath();g.ellipse(0,z*0.2,z*0.38,z*0.5,0,0,7);g.fill();g.stroke();
+    g.beginPath();g.ellipse(0,-z*0.3,z*0.3,z*0.22,0,0,7);g.fill();g.stroke();
+  }else if(b.type==="spider"){
+    var lm2=Math.sin(b.sa*15);
+    legs(z,"#4a154b",2.5,function(s){for(var i=0;i<4;i++){var y=(i-1.5)*z*0.25,sw=(i%2?-lm2:lm2)*0.25;
+      g.beginPath();g.moveTo(s*z*0.2,y);g.lineTo(s*z*(0.7+sw),y-z*0.2);g.lineTo(s*z*(0.95+sw),y+z*0.3);g.stroke()}});
+    g.fillStyle="#2d1133";g.strokeStyle="#e066ff";g.lineWidth=1.5;
+    g.beginPath();g.arc(0,z*0.2,z*0.45,0,7);g.fill();g.stroke();
+    g.beginPath();g.arc(0,-z*0.3,z*0.3,0,7);g.fill();g.stroke();
+    g.fillStyle="#ff0055";g.beginPath();g.arc(-z*0.12,-z*0.4,3,0,7);g.arc(z*0.12,-z*0.4,3,0,7);g.fill();
+  }else{
+    var bk=b.type==="black";
+    legs(z,bk?"#000":"#121212",2,function(s){
+      [[-0.3,-0.6,-0.8],[0,-0.1,0.1],[0.3,0.5,0.8]].forEach(function(l,i){
+        var ex=[0.6,0.75,0.7][i];g.beginPath();g.moveTo(s*z*0.25,z*l[0]);g.lineTo(s*z*ex,z*(i==1?-0.1:l[1]));g.lineTo(s*z*(ex+0.12),z*(i==1?0.1:l[2]));g.stroke()})});
+    var wf=Math.sin(b.wf*2)*0.8;
+    g.fillStyle=bk?"rgba(180,200,220,.45)":"rgba(235,245,255,.55)";g.strokeStyle="rgba(150,170,190,.8)";g.lineWidth=1;
+    [-1,1].forEach(function(s){g.save();g.rotate(s*(-0.5+wf));g.beginPath();g.ellipse(s*z*0.65,-z*0.1,z*0.75,z*0.28,s*-0.2,0,7);g.fill();g.stroke();g.restore()});
+    g.strokeStyle="#0d0d0d";g.lineWidth=1.8;g.beginPath();
+    g.moveTo(-z*0.15,-z*0.65);g.lineTo(-z*0.35,-z*0.95);g.moveTo(z*0.15,-z*0.65);g.lineTo(z*0.35,-z*0.95);g.stroke();
+    var bg=g.createLinearGradient(-z*0.5,0,z*0.5,0);
+    if(bk){bg.addColorStop(0,"#111115");bg.addColorStop(0.5,"#33333d");bg.addColorStop(1,"#0a0a0d")}
+    else{var pl={gold:["#8a6b00","#ffd700","#a37f00"],boss:["#5a0f0f","#c93a2a","#3a0808"]}[b.type]||["#2d5418","#52942b","#203e10"];bg.addColorStop(0,pl[0]);bg.addColorStop(0.5,pl[1]);bg.addColorStop(1,pl[2])}
+    g.fillStyle=bg;g.shadowColor="#ffd700";g.shadowBlur=b.type==="gold"?20:0;g.strokeStyle=bk?"#000":"#14260a";g.lineWidth=2;g.beginPath();
+    g.moveTo(0,-z*0.65);g.lineTo(z*0.48,-z*0.3);g.lineTo(z*0.42,z*0.4);g.lineTo(0,z*0.68);g.lineTo(-z*0.42,z*0.4);g.lineTo(-z*0.48,-z*0.3);g.closePath();g.fill();g.stroke();
+    g.fillStyle=bk?"#22222b":(b.type==="gold"?"#fff2a0":(b.type==="boss"?"#ff8a6a":"#3b6b1f"));g.beginPath();g.moveTo(0,-z*0.28);g.lineTo(z*0.28,z*0.12);g.lineTo(-z*0.28,z*0.12);g.closePath();g.fill();g.stroke();
+  }
+  g.restore();
+  if(b.type==="boss"){var w=b.size*1.2;g.fillStyle="#400";g.fillRect(b.x-w/2,b.y-b.size-14,w,6);g.fillStyle="#f44";g.fillRect(b.x-w/2,b.y-b.size-14,w*b.hp/b.mhp,6)}
+}
+function tap(px,py){
+  initAudio();
+  if(st!=="play"){if(performance.now()<lockUntil)return;start();return}
+  for(var bi=0;bi<2;bi++){var rc=btnRect(bi);if(px>=rc.x&&px<=rc.x+rc.w&&py>=rc.y&&py<=rc.y+rc.h){useItem(bi);return}}
+  if(armed){swat(px,py);return}
+  for(var j=0;j<items.length;j++){if(Math.hypot(px-items[j].x,py-items[j].y)<54){var it=items.splice(j,1)[0];stock[it.k]=Math.min(2,stock[it.k]+1);sndGet();burst(it.x,it.y,"#9ff",10);
+    fx.push({x:it.x,y:it.y-20,text:(it.k==="spray"?"殺虫剤":"ハエ叩き")+" GET!",color:"#9ff",l:0.9});return}}
+  var hit=null,md=1e9;
+  bugs.forEach(function(b){if(b.dead)return;var d=Math.hypot(px-b.x,py-b.y);if(d<b.size*1.8&&d<md){hit=b;md=d}});
+  if(!hit)return;
+  zap();
+  if(hit.type==="boss"&&--hit.hp>0){shake=0.2;burst(hit.x,hit.y,"#ff8844",10);fx.push({x:hit.x,y:hit.y-20,text:"HIT!",color:"#ff8844",l:0.6});return}
+  hit.dead=true;
+  if(hit.type==="spider"){lives--;combo=0;shake=0.4;burst(hit.x,hit.y,"#e066ff",12);fx.push({x:hit.x,y:hit.y-10,text:"クモを叩いた！ LIFE-1",color:"#ff3333",l:0.9});if(lives<=0)gameOver()}
+  else{
+    combo++;comboT=1.6;var mult=Math.min(1+Math.floor(combo/5),5);
+    var p={stag:[60,"+60 クワガタ！","#00ffff"],black:[30,"+30 BLACK!","#ff3366"],normal:[10,"+10","#ffea78"],gold:[100,"+100 金カメムシ！SLOW","#ffd700"],boss:[150,"+150 撃破！","#ff6644"]}[hit.type];
+    if(hit.type==="gold")slow=4;
+    score+=p[0]*mult;burst(hit.x,hit.y,p[2],hit.type==="normal"?8:16);
+    fx.push({x:hit.x,y:hit.y-10,text:p[1]+(mult>1?" x"+mult:""),color:p[2],l:0.9});
+  }
+}
+function pos(e){var r=cv.getBoundingClientRect(),o=(e.touches&&e.touches[0])||(e.changedTouches&&e.changedTouches[0])||e;return{x:o.clientX-r.left,y:o.clientY-r.top}}
+cv.addEventListener("touchstart",function(e){e.preventDefault();var r=cv.getBoundingClientRect();for(var i=0;i<e.changedTouches.length;i++){var o=e.changedTouches[i];tap(o.clientX-r.left,o.clientY-r.top)}},{passive:false});
+// iOSは touchend でも音声を解禁する
+cv.addEventListener("touchend",function(e){e.preventDefault();initAudio()},{passive:false});
+cv.addEventListener("mousedown",function(e){var p=pos(e);tap(p.x,p.y)});
+var last=performance.now();
+function loop(now){
+  var dt=Math.min((now-last)/1000,0.1);last=now;var bp=bulb();
+  if(st==="play"){
+    t+=dt;spawn-=dt;
+    if(spawn<=0){spawnBug();spawn=Math.max(0.15,0.9-Math.min(t/100,1)*0.7)}
+    if(t>=nextBoss){spawnBug('boss');nextBoss+=25;fx.push({x:W/2,y:H*0.5,text:'⚠ 巨大カメムシ襲来！',color:'#ff4444',l:1.5})}
+    comboT-=dt;if(comboT<=0)combo=0;var k=slow>0?0.35:1;slow-=dt;
+    itemT-=dt;if(itemT<=0){items.push({x:W*0.1+Math.random()*W*0.8,y:-30,k:Math.random()<0.5?"spray":"swat",ph:Math.random()*6});itemT=22+Math.random()*14}
+    items.forEach(function(it){it.ph+=dt;it.y+=50*S*dt;it.x+=Math.sin(it.ph*2)*20*dt});items=items.filter(function(it){return it.y<H+40});
+    if(spray){spray.t+=dt;var R=spray.t*Math.max(W,H)*1.8;
+      bugs.forEach(function(b){if(b.dead||b.sprayed)return;if(Math.hypot(b.x-spray.x,b.y-spray.y)<R){b.sprayed=true;
+        if(b.type==="spider"){fx.push({x:b.x,y:b.y-20,text:"クモには効かない！",color:"#ff9966",l:0.9});sndNo()}else itemKill(b,1)}});
+      if(spray.t>0.9)spray=null}
+    if(swatFx){swatFx.l-=dt;if(swatFx.l<=0)swatFx=null}
+    falls.forEach(function(f){f.vy+=1300*dt;f.x+=f.vx*dt;f.y+=f.vy*dt;f.rot+=f.vr*dt;f.l-=dt});falls=falls.filter(function(f){return f.l>0&&f.y<H+100});
+    parts.forEach(function(p){p.x+=p.vx*dt;p.y+=p.vy*dt;p.l-=dt});parts=parts.filter(function(p){return p.l>0});
+    bugs.forEach(function(b){
+      if(b.dead||st!=="play")return;b.wf+=dt*25;b.sa+=dt;
+      var dx=bp.x-b.x,dy=bp.y-b.y,d=Math.hypot(dx,dy)||1,vx=dx/d*b.sp,vy=dy/d*b.sp;
+      if(b.type==="spider"){var zg=Math.sin(b.sa*8)*0.8*Math.min(1,d/160),ux=vx/b.sp,uy=vy/b.sp;vx+=-uy*b.sp*zg;vy+=ux*b.sp*zg}
+      b.x+=vx*dt*k;b.y+=vy*dt*k;
+      if(d<bp.r+5){b.dead=true;
+        if(b.type==="spider"){if(lives<3)lives++;fx.push({x:bp.x,y:bp.y+40,text:"クモが電球へ！ LIFE+1",color:"#66ff66",l:1})}
+        else{lives-=(b.type==="boss"?2:1);shake=0.4;burst(bp.x,bp.y,"#ff5555",14);fx.push({x:bp.x,y:bp.y+40,text:"ジュッ！",color:"#ff5555",l:0.8});if(lives<=0)gameOver()}}
+    });
+    bugs=bugs.filter(function(b){return!b.dead});
+    fx.forEach(function(f){f.l-=dt});fx=fx.filter(function(f){return f.l>0});
+  }
+  g.clearRect(0,0,W,H);
+  g.save();if(shake>0){shake-=dt;g.translate((Math.random()-.5)*shake*30,(Math.random()-.5)*shake*30)}
+  var n=st==="play"?Math.min(t/120,1):(st==="over"?1:0);
+  g.fillStyle="rgb("+Math.floor(180*(1-n)+15*n)+","+Math.floor(90*(1-n)+18*n)+","+Math.floor(60*(1-n)+28*n)+")";g.fillRect(0,0,W,H);
+  if(st!=="over"){
+    var R=Math.max(W,H)*0.65,gl=g.createRadialGradient(bp.x,bp.y,5,bp.x,bp.y,R);
+    gl.addColorStop(0,"rgba(255,235,150,"+(0.3+n*0.3)+")");gl.addColorStop(0.35,"rgba(255,180,60,"+(0.1+n*0.2)+")");gl.addColorStop(1,"rgba(0,0,0,0)");
+    g.fillStyle=gl;g.fillRect(0,0,W,H);
+  }
+  g.strokeStyle="#222";g.lineWidth=4;g.beginPath();g.moveTo(bp.x,0);g.lineTo(bp.x,bp.y-bp.r);g.stroke();
+  g.fillStyle=st==="over"?"#555":"#ffea78";g.beginPath();g.arc(bp.x,bp.y,bp.r,0,7);g.fill();
+  g.strokeStyle=st==="over"?"#333":"#ffa500";g.lineWidth=3;g.stroke();
+  bugs.forEach(draw);
+  falls.forEach(function(f){g.globalAlpha=Math.min(1,f.l*2);draw(f)});g.globalAlpha=1;
+  parts.forEach(function(p){g.globalAlpha=Math.max(0,p.l*2);g.fillStyle=p.c;g.fillRect(p.x-2,p.y-2,4,4)});g.globalAlpha=1;
+  if(slow>0&&st==="play"){g.fillStyle="rgba(255,215,0,.1)";g.fillRect(0,0,W,H)}
+  items.forEach(drawItem);
+  if(spray){var R2=spray.t*Math.max(W,H)*1.8,al=Math.max(0,1-spray.t/0.9),sg=g.createRadialGradient(spray.x,spray.y,R2*0.6,spray.x,spray.y,R2+1);
+    sg.addColorStop(0,"rgba(200,255,220,0)");sg.addColorStop(1,"rgba(200,255,220,"+(0.5*al)+")");g.fillStyle=sg;g.fillRect(0,0,W,H)}
+  if(swatFx){var a2=swatFx.l/0.35;g.strokeStyle="rgba(255,255,255,"+a2+")";g.lineWidth=5;g.beginPath();g.arc(swatFx.x,swatFx.y,swatFx.r*(1.1-a2*0.3),0,7);g.stroke();g.fillStyle="rgba(255,255,255,"+(a2*0.25)+")";g.fill()}
+  g.font="bold 22px sans-serif";g.textAlign="center";
+  fx.forEach(function(f){g.fillStyle=f.color;g.fillText(f.text,f.x,f.y)});
+  g.restore();
+  g.fillStyle="#fff";g.font="bold 20px sans-serif";g.textAlign="left";
+  if(st==="play"){
+    g.save();g.translate(0,SAT);
+    g.fillText("SCORE: "+score,16,40);g.fillText("LIFE: "+"♥".repeat(Math.max(0,lives)),16,70);
+    if(combo>=2){g.fillStyle="#ffea78";g.fillText("COMBO "+combo+(combo>=5?"  x"+Math.min(1+Math.floor(combo/5),5):""),16,100);g.fillStyle="#fff"}
+    g.textAlign="right";g.fillText("TIME: "+Math.floor(t)+"s",W-16,40);g.font="14px sans-serif";g.fillText("BEST: "+hi,W-16,62);if(slow>0){g.fillStyle="#ffd700";g.font="bold 16px sans-serif";g.fillText("SLOW "+slow.toFixed(1)+"s",W-16,86)}
+    g.restore();drawButtons();
+  }else{
+    g.fillStyle="rgba(0,0,0,.85)";g.fillRect(0,0,W,H);g.textAlign="center";g.fillStyle="#fff";
+    if(st==="title"){
+      g.font="bold 28px sans-serif";g.fillText("夕暮れのカメムシ退治",W/2,H*0.32);g.font="15px sans-serif";
+      g.fillText("・カメムシをタップして撃退！",W/2,H*0.40);
+      g.fillText("・黒カメムシ(+30pt)は高得点！",W/2,H*0.45);
+      g.fillText("・ジグザグ走る【クモ】を叩くとLIFE減少！",W/2,H*0.50);
+      g.fillText("(クモを電球へ届かせるとLIFE回復)",W/2,H*0.54);
+      g.fillText("・連続で倒すとコンボ倍率UP！金カメムシ=スロー",W/2,H*0.58);g.fillText("・25秒ごとに巨大カメムシ(3回タップ)",W/2,H*0.62);
+      g.fillText("・落ちてくる殺虫剤/ハエ叩きを拾って下のボタンで使用",W/2,H*0.67);g.fillText("　(どちらもクモには効かない！)",W/2,H*0.71);
+      g.fillText("ベストスコア: "+hi,W/2,H*0.85);
+      g.fillStyle="#ffea78";g.font="bold 24px sans-serif";g.fillText("【 画面をタップしてスタート 】",W/2,H*0.78);
+    }else{
+      g.font="bold 32px sans-serif";g.fillStyle="#ff5555";g.fillText("電球が消された...",W/2,H*0.30);
+      g.fillStyle="#fff";g.font="bold 24px sans-serif";g.fillText("最終スコア: "+score+" pt"+(rec?"  NEW RECORD!":""),W/2,H*0.42);
+      var rk=comment(score);g.fillStyle="#ffea78";g.font="bold 20px sans-serif";g.fillText("ランク "+rk.r+"："+rk.txt,W/2,H*0.52);g.font="14px sans-serif";g.fillStyle="#ccc";g.fillText(rk.next?"次のランクまであと "+rk.next+" pt":"最高ランク達成！",W/2,H*0.57);
+      g.fillStyle=performance.now()<lockUntil?"#777":"#fff";g.font="bold 22px sans-serif";g.fillText("【 タップしてもう一度遊ぶ 】",W/2,H*0.68);
+    }
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+})();
+</script></body></html>
